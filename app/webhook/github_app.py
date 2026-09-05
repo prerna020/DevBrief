@@ -43,6 +43,9 @@ class InstallationClient:
     async def get(self, path_or_url: str, **kwargs: object) -> httpx.Response:
         return await self.client.get(path_or_url, **kwargs)
 
+    async def post(self, path_or_url: str, **kwargs: object) -> httpx.Response:
+        return await self.client.post(path_or_url, **kwargs)
+
     async def aclose(self) -> None:
         await self.client.aclose()
 
@@ -67,4 +70,3 @@ async def create_installation_client(installation_id: int) -> InstallationClient
         timeout=20.0,
     )
     return InstallationClient(installation_client)
-

@@ -10,10 +10,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+import asyncpg
 
-from devbrief_core.review import review_diff
-from .fetch_diff import fetch_changed_files
 from .github_app import create_installation_client
+from .review_pr import review_pull_request
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -28,6 +29,22 @@ def _verify_signature(raw_body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+async def _record_delivery(delivery_id: str) -> bool:
+    """Record a delivery before scheduling work; False means it is a duplicate."""
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is missing. Webhook delivery de-duplication requires PostgreSQL.")
+    connection = await asyncpg.connect(database_url)
+    try:
+        await connection.execute("INSERT INTO processed_deliveries (delivery_id) VALUES ($1)", delivery_id)
+        return True
+    except asyncpg.exceptions.UniqueViolationError:
+        logger.info("Ignoring duplicate GitHub delivery %s", delivery_id)
+        return False
+    finally:
+        await connection.close()
+
+
 async def _review_pull_request(payload: dict[str, Any]) -> None:
     installation_id = payload["installation"]["id"]
     repository = payload["repository"]
@@ -35,13 +52,8 @@ async def _review_pull_request(payload: dict[str, Any]) -> None:
     owner, repo, number = repository["owner"]["login"], repository["name"], pull_request["number"]
     client = await create_installation_client(installation_id)
     try:
-        changed = await fetch_changed_files(client, owner, repo, number)
-        if changed["too_large"]:
-            logger.info("Skipping %s/%s#%s: %s changed files exceeds cap", owner, repo, number, changed["file_count"])
-            return
-        for changed_file in changed["reviewable_files"]:
-            await review_diff(changed_file["patch"], changed_file["filename"])
-        logger.info("Reviewed %s files for %s/%s#%s; skipped %s", len(changed["reviewable_files"]), owner, repo, number, len(changed["skipped_files"]))
+        await review_pull_request(client, owner, repo, number)
+        logger.info("Completed background review for %s/%s#%s", owner, repo, number)
     except Exception:
         logger.exception("Background review failed for %s/%s#%s", owner, repo, number)
     finally:
@@ -58,6 +70,11 @@ async def webhook(request: Request) -> dict[str, str]:
     raw_body = await request.body()  # Must occur before JSON parsing.
     if not _verify_signature(raw_body, request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid webhook signature")
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+    if not delivery_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-GitHub-Delivery header")
+    if not await _record_delivery(delivery_id):
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "duplicate"})
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError as error:
@@ -69,4 +86,3 @@ async def webhook(request: Request) -> dict[str, str]:
         return {"status": "ignored"}
     asyncio.create_task(_review_pull_request(payload))
     return {"status": "accepted"}
-
