@@ -1,0 +1,15 @@
+{
+  "_comment": "TEMPLATE ONLY. Copy, rename without the leading underscore, and replace every placeholder.",
+  "id": "placeholder-case-id",
+  "sourcePr": "https://example.com/owner/repository/pull/123",
+  "language": "Python",
+  "diff": "--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-placeholder\n+replacement",
+  "expectedIssues": [{
+    "category": "error-handling",
+    "description": "Describe the expected issue here.",
+    "mustMention": ["placeholder concept"],
+    "severity": "medium"
+  }],
+  "notesForLabeler": "Replace this template with case-specific labeling notes."
+}
+
