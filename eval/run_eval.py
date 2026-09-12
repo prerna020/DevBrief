@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from devbrief_core.review import ReviewError, review_diff
+from app.core.review import ReviewError, review_diff
 from .judge import judge_review
 from .load_golden import load_golden_cases
 
@@ -55,4 +55,3 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--prompt-version", default="v1")
     asyncio.run(main(parser.parse_args().prompt_version))
-

@@ -15,10 +15,12 @@ import asyncpg
 
 from .github_app import create_installation_client
 from .review_pr import review_pull_request
+from .rules_api import router as rules_router
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 app = FastAPI(title="DevBrief GitHub webhook")
+app.include_router(rules_router)
 
 
 def _verify_signature(raw_body: bytes, signature: str | None) -> bool:
@@ -52,7 +54,14 @@ async def _review_pull_request(payload: dict[str, Any]) -> None:
     owner, repo, number = repository["owner"]["login"], repository["name"], pull_request["number"]
     client = await create_installation_client(installation_id)
     try:
-        await review_pull_request(client, owner, repo, number)
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            raise RuntimeError("DATABASE_URL is missing. Team rules require PostgreSQL.")
+        connection = await asyncpg.connect(database_url)
+        try:
+            await review_pull_request(client, owner, repo, number, connection)
+        finally:
+            await connection.close()
         logger.info("Completed background review for %s/%s#%s", owner, repo, number)
     except Exception:
         logger.exception("Background review failed for %s/%s#%s", owner, repo, number)

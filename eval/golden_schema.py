@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from devbrief_core.schema import IssueCategory, Severity
+from app.core.schema import IssueCategory, Severity
 
 
 class ExpectedIssue(BaseModel):
@@ -23,4 +23,3 @@ class GoldenCase(BaseModel):
     diff: str
     expected_issues: list[ExpectedIssue] = Field(alias="expectedIssues")
     notes_for_labeler: str | None = Field(default=None, alias="notesForLabeler")
-

@@ -5,7 +5,8 @@ from typing import Any, Protocol
 
 import httpx
 
-from devbrief_core.review import review_diff
+from app.core.review import review_diff
+from app.db.rules_repo import AsyncpgConnection, get_active_rules, get_or_create_team_and_repo
 from .fetch_diff import fetch_changed_files
 from .line_map import build_line_map, find_nearest_valid_line
 
@@ -16,7 +17,8 @@ class InstallationClient(Protocol):
 
 
 def _comment_body(issue: Any) -> str:
-    body = f"❌ Issue: {issue.issue}\n📖 Why: {issue.why}\n✅ Fix: {issue.fix}"
+    prefix = f"⚙️ Team rule: {issue.matched_rule}\n" if issue.is_custom_rule_violation else ""
+    body = f"{prefix}❌ Issue: {issue.issue}\n📖 Why: {issue.why}\n✅ Fix: {issue.fix}"
     if issue.learn_more_url:
         body += f"\n🔗 Learn: {issue.learn_more_url}"
     return body
@@ -33,7 +35,9 @@ def _summary(issue_count: int, skipped_count: int, failed_files: list[dict[str, 
     return "\n".join(lines)
 
 
-async def review_pull_request(installation_client: InstallationClient, owner: str, repo: str, pull_number: int) -> None:
+async def review_pull_request(installation_client: InstallationClient, owner: str, repo: str, pull_number: int, conn: AsyncpgConnection) -> None:
+    team_id = await get_or_create_team_and_repo(conn, owner, repo)
+    team_rules = await get_active_rules(conn, team_id)
     changed = await fetch_changed_files(installation_client, owner, repo, pull_number)
     issue_comment_url = f"/repos/{owner}/{repo}/issues/{pull_number}/comments"
     if changed["too_large"]:
@@ -47,7 +51,7 @@ async def review_pull_request(installation_client: InstallationClient, owner: st
     async def review_file(changed_file: dict[str, Any]) -> tuple[dict[str, Any], Any | None]:
         try:
             async with semaphore:
-                return changed_file, await review_diff(changed_file["patch"], changed_file["filename"])
+                return changed_file, await review_diff(changed_file["patch"], changed_file["filename"], team_rules)
         except Exception as error:
             failed_files.append({"file": changed_file.get("filename", "unknown"), "reason": str(error)})
             return changed_file, None
@@ -81,4 +85,3 @@ async def review_pull_request(installation_client: InstallationClient, owner: st
         },
     )
     response.raise_for_status()
-

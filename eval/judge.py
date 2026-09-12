@@ -7,8 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from devbrief_core.groq_client import create_groq_client
-from devbrief_core.schema import Issue, groq_strict_json_schema
+from app.core.groq_client import create_groq_client
+from app.core.schema import Issue, groq_strict_json_schema
 from .golden_schema import ExpectedIssue
 
 RETRY_DELAYS_SECONDS = (0.5, 1.5, 4.0)
@@ -79,4 +79,3 @@ async def judge_review(expected_issues: list[ExpectedIssue], actual_issues: list
                 break
             await asyncio.sleep(delay)
     raise JudgeError("Unable to generate a valid judgement after 3 attempts.", last_error)
-
