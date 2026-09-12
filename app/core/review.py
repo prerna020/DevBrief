@@ -51,7 +51,7 @@ async def review_diff(diff: str, file_path: str, team_rules: list[str] = []) -> 
             completion = await client.chat.completions.create(
                 model=model, temperature=0.2,
                 response_format={"type": "json_schema", "json_schema": {"name": "review", "strict": True, "schema": REVIEW_JSON_SCHEMA}},
-                messages=[{"role": "system", "content": build_learning_mode_prompt(team_rules)}, {"role": "user", "content": f"File path: {file_path}\n\nDiff:\n{diff}"}],
+                messages=[{"role": "system", "content": build_learning_mode_prompt(team_rules)}, {"role": "user", "content": f"File path: {file_path}\n\nDiff:\n<UNTRUSTED_DIFF_CONTENT>\n{diff}\n</UNTRUSTED_DIFF_CONTENT>"}],
             )
             content = completion.choices[0].message.content if completion.choices else None
             if not content:
