@@ -25,9 +25,9 @@ async def test_active_rules_excludes_inactive_rules() -> None:
 @pytest.mark.asyncio
 async def test_new_repo_gets_an_automatic_team() -> None:
     conn = AsyncMock()
-    conn.fetchrow.side_effect = [None, {"id": 42}]
+    conn.fetchrow.side_effect = [None, {"id": 42}, {"id": 99}]
 
-    team_id = await get_or_create_team_and_repo(conn, "acme", "widget")
+    team_id, repo_id = await get_or_create_team_and_repo(conn, "acme", "widget")
 
     assert team_id == 42
-    assert conn.execute.await_args.args[1:] == (42, "acme", "widget")
+    assert repo_id == 99

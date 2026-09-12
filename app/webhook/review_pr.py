@@ -35,8 +35,8 @@ def _summary(issue_count: int, skipped_count: int, failed_files: list[dict[str, 
     return "\n".join(lines)
 
 
-async def review_pull_request(installation_client: InstallationClient, owner: str, repo: str, pull_number: int, conn: AsyncpgConnection) -> None:
-    team_id = await get_or_create_team_and_repo(conn, owner, repo)
+async def review_pull_request(installation_client: InstallationClient, owner: str, repo: str, pull_number: int, developer_login: str, conn: AsyncpgConnection) -> None:
+    team_id, repo_id = await get_or_create_team_and_repo(conn, owner, repo)
     team_rules = await get_active_rules(conn, team_id)
     changed = await fetch_changed_files(installation_client, owner, repo, pull_number)
     issue_comment_url = f"/repos/{owner}/{repo}/issues/{pull_number}/comments"
@@ -60,12 +60,21 @@ async def review_pull_request(installation_client: InstallationClient, owner: st
     inline_comments: list[dict[str, Any]] = []
     fallback_notes: list[str] = []
     issue_count = 0
+    db_issues = []
+    
     for changed_file, result in reviewed_files:
         if result is None:
             continue
         valid_lines = build_line_map(changed_file["patch"])
         for issue in result.review.issues:
             issue_count += 1
+            db_issues.append((
+                issue.file,
+                issue.category,
+                issue.severity,
+                issue.is_custom_rule_violation,
+                issue.matched_rule,
+            ))
             line = find_nearest_valid_line(issue.start_line, valid_lines)
             if line is None:
                 fallback_notes.append(f"`{issue.file}` line {issue.start_line}: {issue.issue}")
@@ -85,3 +94,19 @@ async def review_pull_request(installation_client: InstallationClient, owner: st
         },
     )
     response.raise_for_status()
+
+    await conn.execute("BEGIN")
+    try:
+        review_id = await conn.fetchval(
+            "INSERT INTO reviews (team_id, repo_id, pull_number, developer_login, head_sha) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            team_id, repo_id, pull_number, developer_login, head_sha
+        )
+        for dbi in db_issues:
+            await conn.execute(
+                "INSERT INTO review_issues (review_id, file, category, severity, is_custom_rule_violation, matched_rule) VALUES ($1, $2, $3, $4, $5, $6)",
+                review_id, *dbi
+            )
+        await conn.execute("COMMIT")
+    except Exception:
+        await conn.execute("ROLLBACK")
+        raise

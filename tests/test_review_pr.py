@@ -39,17 +39,29 @@ class FakeInstallationClient:
 
 
 class FakeRulesConnection:
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+        self.inserted_review_issues: list[tuple] = []
+
     async def fetchrow(self, query: str, *_: object):
-        if query.startswith("SELECT team_id"):
-            return {"team_id": 9}
+        if query.startswith("SELECT id, team_id"):
+            return {"team_id": 9, "id": 42}
         raise AssertionError(f"Unexpected fetchrow: {query}")
+
+    async def fetchval(self, query: str, *args: object):
+        if query.startswith("INSERT INTO reviews"):
+            self.executed.append("INSERT INTO reviews")
+            return 999
+        raise AssertionError(f"Unexpected fetchval: {query}")
 
     async def fetch(self, query: str, *_: object):
         assert "active = true" in query
         return [{"rule_text": "Use parameterized SQL queries"}]
 
-    async def execute(self, *_: object):
-        raise AssertionError("The existing repository should not be created again")
+    async def execute(self, query: str, *args: object):
+        self.executed.append(query)
+        if query.startswith("INSERT INTO review_issues"):
+            self.inserted_review_issues.append(args)
 
 
 def review_result(*issues: Issue) -> ReviewResult:
@@ -67,7 +79,8 @@ async def test_binary_is_skipped_and_issue_is_mapped_inline(monkeypatch, client:
     mocked_review = AsyncMock(side_effect=lambda _patch, path, _rules: review_result(issue) if path == "unsafe.py" else review_result())
     monkeypatch.setattr(review_pr, "review_diff", mocked_review)
 
-    await review_pr.review_pull_request(client, "acme", "demo", 7, FakeRulesConnection())
+    conn = FakeRulesConnection()
+    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn)
 
     reviewed_paths = {call.args[1] for call in mocked_review.await_args_list}
     assert reviewed_paths == {"unsafe.py", "clean.py"}  # image.png has no patch and is never reviewed.
@@ -75,18 +88,27 @@ async def test_binary_is_skipped_and_issue_is_mapped_inline(monkeypatch, client:
     payload = client.posts[-1][1]
     assert payload["comments"] == [{"path": "unsafe.py", "line": 2, "side": "RIGHT", "body": "❌ Issue: Unsafe input\n📖 Why: Input is untrusted\n✅ Fix: Validate it."}]
     assert "Skipped files: 1" in payload["body"]
+    
+    assert "INSERT INTO reviews" in conn.executed
+    assert "BEGIN" in conn.executed
+    assert "COMMIT" in conn.executed
+    assert len(conn.inserted_review_issues) == 1
 
 
 @pytest.mark.asyncio
 async def test_zero_issues_still_posts_positive_summary(monkeypatch, client: FakeInstallationClient) -> None:
     monkeypatch.setattr(review_pr, "review_diff", AsyncMock(return_value=review_result()))
 
-    await review_pr.review_pull_request(client, "acme", "demo", 7, FakeRulesConnection())
+    conn = FakeRulesConnection()
+    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn)
 
     payload = client.posts[-1][1]
     assert payload["comments"] == []
     assert "no actionable issues" in payload["body"]
     assert payload["body"]
+
+    assert "INSERT INTO reviews" in conn.executed
+    assert len(conn.inserted_review_issues) == 0
 
 
 @pytest.mark.asyncio
@@ -99,10 +121,12 @@ async def test_one_review_failure_does_not_stop_other_files(monkeypatch, client:
     mocked_review = AsyncMock(side_effect=review_side_effect)
     monkeypatch.setattr(review_pr, "review_diff", mocked_review)
 
-    await review_pr.review_pull_request(client, "acme", "demo", 7, FakeRulesConnection())
+    conn = FakeRulesConnection()
+    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn)
 
     assert {call.args[1] for call in mocked_review.await_args_list} == {"unsafe.py", "clean.py"}
     assert "Failed files: 1" in client.posts[-1][1]["body"]
+    assert "INSERT INTO reviews" in conn.executed
 
 
 def test_custom_rule_comment_has_distinct_header() -> None:

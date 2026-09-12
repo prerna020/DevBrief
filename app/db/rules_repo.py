@@ -5,6 +5,7 @@ from typing import Protocol
 
 class AsyncpgConnection(Protocol):
     async def fetchrow(self, query: str, *args: object) -> object: ...
+    async def fetchval(self, query: str, *args: object) -> object: ...
     async def fetch(self, query: str, *args: object) -> list[object]: ...
     async def execute(self, query: str, *args: object) -> str: ...
 
@@ -14,12 +15,12 @@ def _value(row: object, key: str) -> object:
     return row[key]  # type: ignore[index]
 
 
-async def get_or_create_team_and_repo(conn: AsyncpgConnection, owner: str, name: str) -> int:
+async def get_or_create_team_and_repo(conn: AsyncpgConnection, owner: str, name: str) -> tuple[int, int]:
     existing_repo = await conn.fetchrow(
-        "SELECT team_id FROM repos WHERE owner = $1 AND name = $2", owner, name
+        "SELECT id, team_id FROM repos WHERE owner = $1 AND name = $2", owner, name
     )
     if existing_repo is not None:
-        return int(_value(existing_repo, "team_id"))
+        return int(_value(existing_repo, "team_id")), int(_value(existing_repo, "id"))
 
     created_team = await conn.fetchrow(
         "INSERT INTO teams (name) VALUES ($1) RETURNING id", f"{owner}/{name} (auto)"
@@ -27,10 +28,13 @@ async def get_or_create_team_and_repo(conn: AsyncpgConnection, owner: str, name:
     if created_team is None:
         raise RuntimeError("Creating the automatic team returned no row.")
     team_id = int(_value(created_team, "id"))
-    await conn.execute(
-        "INSERT INTO repos (team_id, owner, name) VALUES ($1, $2, $3)", team_id, owner, name
+    created_repo = await conn.fetchrow(
+        "INSERT INTO repos (team_id, owner, name) VALUES ($1, $2, $3) RETURNING id", team_id, owner, name
     )
-    return team_id
+    if created_repo is None:
+        raise RuntimeError("Creating the automatic repo returned no row.")
+    repo_id = int(_value(created_repo, "id"))
+    return team_id, repo_id
 
 
 async def get_active_rules(conn: AsyncpgConnection, team_id: int) -> list[str]:
