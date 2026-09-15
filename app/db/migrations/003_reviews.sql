@@ -16,6 +16,9 @@ CREATE TABLE review_issues (
     severity TEXT,
     is_custom_rule_violation BOOLEAN,
     matched_rule TEXT,
+    issue TEXT,
+    why TEXT,
+    fix TEXT,
     resolved BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT now()
 );
