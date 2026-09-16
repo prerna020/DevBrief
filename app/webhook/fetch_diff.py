@@ -50,3 +50,41 @@ async def fetch_changed_files(
 
     return {"too_large": False, "file_count": file_count, "reviewable_files": reviewable_files, "skipped_files": skipped_files}
 
+async def fetch_files_since(
+    installation_client: InstallationClient, owner: str, repo: str, base_sha: str, head_sha: str
+) -> dict[str, Any] | None:
+    """Fetch files changed between base_sha and head_sha using /compare/{base}...{head}."""
+    next_url: str | None = f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}"
+    params: dict[str, int] | None = {"per_page": 100}
+    file_count = 0
+    reviewable_files: list[dict[str, Any]] = []
+    skipped_files: list[dict[str, str]] = []
+
+    try:
+        while next_url:
+            response = await installation_client.get(next_url, params=params)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            data = response.json()
+            
+            files = data.get("files", [])
+            for changed_file in files:
+                file_count += 1
+                if file_count > MAX_REVIEWABLE_FILES:
+                    return {"too_large": True, "file_count": file_count}
+                if not changed_file.get("patch"):
+                    skipped_files.append({"file": changed_file.get("filename", "unknown"), "reason": "No patch returned (binary file or diff too large)."})
+                else:
+                    reviewable_files.append(changed_file)
+            
+            next_url = _next_link(response.headers.get("Link"))
+            params = None
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return None
+        raise
+    except Exception:
+        return None
+
+    return {"too_large": False, "file_count": file_count, "reviewable_files": reviewable_files, "skipped_files": skipped_files}
