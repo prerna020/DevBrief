@@ -42,7 +42,10 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
+        
+      - name: Apply Gemini Rate Limit Fix
+        run: sed -i 's/tags: \["pr-review-agent"\],/tags: \["pr-review-agent"\], maxConcurrency: 1,/' src/commands/review.ts
+      
       - name: Fetch the PR diff and metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
