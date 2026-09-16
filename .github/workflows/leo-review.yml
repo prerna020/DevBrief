@@ -62,11 +62,7 @@ jobs:
       - name: Run Leo
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_AGENT_GITHUB_REPO: ${{ github.repository }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PR_AGENT_MODEL: ${{ vars.PR_AGENT_MODEL }}
-          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
-          LANGSMITH_TRACING: ${{ secrets.LANGSMITH_API_KEY != '' && 'true' || '' }}
-          LANGSMITH_PROJECT: pr-review-agent
+          OPENAI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai/"
+          PR_AGENT_MODEL: "gemini-3.5-flash"
         run: bun src/cli.ts review --diff /tmp/pr.diff --pr /tmp/pr-metadata.json
