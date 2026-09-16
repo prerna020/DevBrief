@@ -2,33 +2,34 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   test-and-eval:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install uv
         uses: astral-sh/setup-uv@v2
-        
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          
+
       - name: Install dependencies
         run: uv sync
-        
+
       - name: Check code with Ruff
-        run: uv run ruff check .
-        
+        run: uvx ruff check .
+
       - name: Run Pytest
         run: uv run pytest
-        
+
       - name: Run Eval (Check baseline)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
