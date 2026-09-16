@@ -1,0 +1,72 @@
+# Leo reviews pull requests.
+#
+# Triggers:
+#   - automatically on every PR (opened / new commits / reopened)
+#   - on demand: comment "/leo review" on any PR
+#
+# Adopting this in another repo: copy this file, set one model-key secret
+# (OPENAI_API_KEY or ANTHROPIC_API_KEY), optionally a PR_AGENT_MODEL repo
+# variable and a LANGSMITH_API_KEY secret for traces.
+#
+# Security posture: Leo's code and knowledge base are always checked out from
+# the default branch — the PR under review is only read as a diff via the API,
+# never executed.
+name: leo-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: leo-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Run for same-repo PR events, or for "/leo review" comments on a PR.
+    # Fork PRs are skipped: they don't receive the model-key secrets anyway.
+    if: >
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/leo review'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Leo (default branch, not the PR)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: Fetch the PR diff and metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" > /tmp/pr.diff
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,author \
+            --jq '{number: .number, title: .title, description: (.body // ""), author: .author.login, repository: env.GITHUB_REPOSITORY}' \
+            > /tmp/pr-metadata.json
+
+      - name: Run Leo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_AGENT_GITHUB_REPO: ${{ github.repository }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_AGENT_MODEL: ${{ vars.PR_AGENT_MODEL }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_TRACING: ${{ secrets.LANGSMITH_API_KEY != '' && 'true' || '' }}
+          LANGSMITH_PROJECT: pr-review-agent
+        run: bun src/cli.ts review --diff /tmp/pr.diff --pr /tmp/pr-metadata.json
