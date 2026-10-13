@@ -1,0 +1,72 @@
+[
+  {
+    "id": "agent_01_rename",
+    "language": "python",
+    "diff": "@@ -10,3 +10,4 @@\n-def calculate_total(price, tax):\n+def calculate_total_v2(price, tax, discount=0):\n     return (price + tax) - discount\n",
+    "expectedIssues": [
+      {
+        "category": "logic",
+        "severity": "medium",
+        "description": "Function was renamed to calculate_total_v2 but calls to calculate_total in billing.py were not updated",
+        "mustMention": ["calculate_total", "calculate_total_v2", "billing.py"]
+      }
+    ],
+    "notesForLabeler": "Needs to search the codebase for old usages of calculate_total."
+  },
+  {
+    "id": "agent_02_helper_contract",
+    "language": "javascript",
+    "diff": "@@ -1,3 +1,4 @@\n function processPayment(amount) {\n-    return submitPayment(amount);\n+    // We assume submitPayment takes cents now\n+    return submitPayment(amount * 100);\n }\n",
+    "expectedIssues": [
+      {
+        "category": "logic",
+        "severity": "high",
+        "description": "submitPayment still expects dollars as defined in its source file payment_api.js",
+        "mustMention": ["submitPayment", "dollars", "payment_api.js"]
+      }
+    ],
+    "notesForLabeler": "Needs to read payment_api.js to see submitPayment's actual contract."
+  },
+  {
+    "id": "agent_03_missing_export",
+    "language": "typescript",
+    "diff": "@@ -5,3 +5,4 @@\n-export const getConfig = () => config;\n+const getConfig = () => config;\n",
+    "expectedIssues": [
+      {
+        "category": "logic",
+        "severity": "high",
+        "description": "Removed export from getConfig but it is imported in server.ts",
+        "mustMention": ["export", "getConfig", "server.ts"]
+      }
+    ],
+    "notesForLabeler": "Needs to search codebase for imports of getConfig."
+  },
+  {
+    "id": "agent_04_deleted_class",
+    "language": "python",
+    "diff": "@@ -10,8 +10,1 @@\n-class DataProcessor:\n-    def process(self, data):\n-        pass\n",
+    "expectedIssues": [
+      {
+        "category": "logic",
+        "severity": "high",
+        "description": "Deleted DataProcessor class is still being instantiated in worker.py",
+        "mustMention": ["DataProcessor", "worker.py", "deleted"]
+      }
+    ],
+    "notesForLabeler": "Needs to search codebase for DataProcessor."
+  },
+  {
+    "id": "agent_05_db_schema",
+    "language": "sql",
+    "diff": "@@ -1,3 +1,3 @@\n ALTER TABLE users\n-ADD COLUMN age INT;\n+DROP COLUMN age;\n",
+    "expectedIssues": [
+      {
+        "category": "logic",
+        "severity": "high",
+        "description": "Dropped column 'age' is still queried in the 'get_users_by_age' function in user_repository.py",
+        "mustMention": ["age", "user_repository.py", "get_users_by_age"]
+      }
+    ],
+    "notesForLabeler": "Needs to search codebase for usages of the dropped 'age' column."
+  }
+]

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.core.groq_client import create_groq_client
 from app.core.schema import Issue, groq_strict_json_schema
+
 from .golden_schema import ExpectedIssue
 
 RETRY_DELAYS_SECONDS = (0.5, 1.5, 4.0)
@@ -49,7 +50,7 @@ def _is_retriable(error: Exception) -> bool:
 
 async def judge_review(expected_issues: list[ExpectedIssue], actual_issues: list[Issue]) -> JudgeResult:
     client = create_groq_client()
-    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
     last_error: Exception | None = None
     for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
         try:

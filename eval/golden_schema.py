@@ -22,4 +22,5 @@ class GoldenCase(BaseModel):
     language: str
     diff: str
     expected_issues: list[ExpectedIssue] = Field(alias="expectedIssues")
+    contains_injection_attempt: bool = Field(default=False, alias="containsInjectionAttempt")
     notes_for_labeler: str | None = Field(default=None, alias="notesForLabeler")
