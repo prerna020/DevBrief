@@ -4,6 +4,7 @@ import hashlib
 import hmac
 
 from fastapi.testclient import TestClient
+from typing import Any
 
 from app.webhook import server
 
@@ -26,14 +27,15 @@ def test_webhook_rejects_invalid_signature(monkeypatch) -> None:
 
 def test_webhook_returns_before_background_review(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
-    async def record_delivery(_: str) -> bool: return True
+    async def record_delivery(_: str, log: Any = None) -> bool: return True
     monkeypatch.setattr(server, "_record_delivery", record_delivery)
     body = b'{"action":"opened"}'
     signature = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
     scheduled = []
-    monkeypatch.setattr(server.asyncio, "create_task", lambda coroutine: (coroutine.close(), scheduled.append(True)))
+    async def mock_enqueue(payload, delivery_id, log): scheduled.append(True)
+    monkeypatch.setattr(server, "_enqueue_job", mock_enqueue)
     with TestClient(server.app) as client:
         response = client.post("/webhook", content=body, headers={"X-GitHub-Event": "pull_request", "X-Hub-Signature-256": signature, "X-GitHub-Delivery": "delivery-1"})
-    assert response.status_code == 202
+    assert response.status_code == 200
     assert response.json() == {"status": "accepted"}
     assert scheduled == [True]

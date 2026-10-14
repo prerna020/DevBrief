@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 
 from fastapi.testclient import TestClient
 
+from app.auth.oauth import require_team_member
 from app.webhook import rules_api, server
 
 
@@ -45,13 +46,14 @@ def test_create_list_and_toggle_rule_inactive() -> None:
         yield database
 
     server.app.dependency_overrides[rules_api.get_connection] = override_connection
+    server.app.dependency_overrides[require_team_member] = lambda team_id=None: None
     try:
         with TestClient(server.app) as client:
             created = client.post("/teams/5/rules", json={"rule_text": "Use parameterized SQL queries", "category": "security"})
             assert created.status_code == 201
             rule_id = created.json()["id"]
             assert client.get("/teams/5/rules").json()[0]["rule_text"] == "Use parameterized SQL queries"
-            assert client.patch(f"/rules/{rule_id}", json={"active": False}).json()["active"] is False
+            assert client.patch(f"/teams/5/rules/{rule_id}", json={"active": False}).json()["active"] is False
             assert client.get("/teams/5/rules").json() == []
     finally:
         server.app.dependency_overrides.clear()

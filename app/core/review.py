@@ -38,12 +38,18 @@ class ReviewError(RuntimeError):
 
 
 def _is_retriable(error: Exception) -> bool:
-    return isinstance(error, (json.JSONDecodeError, ValidationError, ConnectionError, TimeoutError, OSError))
+    if isinstance(error, (json.JSONDecodeError, ValidationError, ConnectionError, TimeoutError, OSError)):
+        return True
+    status = getattr(error, "status_code", None)
+    if status in (429, 500, 502, 503, 504):
+        return True
+    error_str = str(error).lower()
+    return "503" in error_str or "429" in error_str or "rate limit" in error_str or "high demand" in error_str
 
 
 async def review_diff(diff: str, file_path: str, team_rules: list[str] = []) -> ReviewResult:
     client = create_groq_client()
-    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     last_error: Exception | None = None
     for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
         started_at = time.perf_counter()

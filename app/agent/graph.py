@@ -3,7 +3,7 @@ import os
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AnyMessage
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -23,9 +23,16 @@ class AgentState(TypedDict):
     final_review: Review | None
 
 def build_review_graph(tools: list[Any]):
-    model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-    # Langchain model
-    model = ChatGroq(model=model_name, temperature=0.2).bind_tools(tools)
+    model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+    base_url = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    # Langchain model via Groq's OpenAI-compatible endpoint
+    model = ChatOpenAI(
+        model=model_name,
+        temperature=0.2,
+        api_key=api_key,
+        base_url=base_url,
+    ).bind_tools(tools)
     tool_node = ToolNode(tools)
 
     async def analyze(state: AgentState):

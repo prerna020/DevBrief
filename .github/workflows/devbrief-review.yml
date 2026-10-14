@@ -1,4 +1,4 @@
-name: leo-review
+name: DevBrief Code Review
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
     types: [created]
 
 concurrency:
-  group: leo-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: devbrief-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 permissions:
@@ -22,12 +22,13 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
-       contains(github.event.comment.body, '/leo review'))
+       (contains(github.event.comment.body, '/devbrief review') ||
+        contains(github.event.comment.body, '/leo review')))
 
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out Leo (The AI Agent)
+      - name: Check out DevBrief (The AI Agent)
         uses: actions/checkout@v4
         with:
           repository: oscardaly/pr-review-agent
@@ -37,9 +38,13 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Apply Gemini Rate Limit Fix
+      - name: Configure DevBrief Persona and Settings
         run: |
           sed -i 's/tags: \["pr-review-agent"\],/tags: \["pr-review-agent"\], maxConcurrency: 1,/' src/commands/review.ts
+          sed -i 's/export const AGENT_NAME = "Leo";/export const AGENT_NAME = "DevBrief";/' src/persona.ts
+          sed -i 's/— \${AGENT_NAME} 🎨.*/— \${AGENT_NAME} ⚡ _(AI Code Review \& Developer Briefing)_`;/' src/persona.ts
+          sed -i 's/Voice — you are Leo/Voice — you are DevBrief/g' src/persona.ts
+          sed -i 's/Leo/DevBrief/g' src/persona.ts
 
       - name: Fetch the PR diff and metadata
         env:
@@ -53,11 +58,11 @@ jobs:
             --jq '{number: .number, title: .title, description: (.body // ""), author: .author.login, repository: env.GITHUB_REPOSITORY}' \
             > /tmp/pr-metadata.json
 
-      - name: Run Leo
+      - name: Run DevBrief
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_AGENT_GITHUB_REPO: ${{ github.repository }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai/"
-          PR_AGENT_MODEL: "gemini-2.5-flash"
+          OPENAI_API_KEY: ${{ secrets.GROQ_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: "https://api.groq.com/openai/v1"
+          PR_AGENT_MODEL: "llama-3.3-70b-versatile"
         run: bun src/cli.ts review --diff /tmp/pr.diff --pr /tmp/pr-metadata.json
