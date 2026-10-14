@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.prompts.learning_mode_v1 import build_learning_mode_prompt
 from app.core.review import ReviewError, review_diff
 from app.core.schema import Issue
-from app.core.prompts.learning_mode_v1 import build_learning_mode_prompt
 
 
 def completion(content: str) -> SimpleNamespace:

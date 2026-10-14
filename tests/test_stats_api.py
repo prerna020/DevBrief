@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth.oauth import require_team_member
 from app.webhook.server import app
 
 client = TestClient(app)
+
+@pytest.fixture(autouse=True)
+def override_auth():
+    async def mock_auth(): pass
+    app.dependency_overrides[require_team_member] = mock_auth
+    yield
+    app.dependency_overrides.clear()
 
 class FakeConnection:
     async def fetch(self, query: str, *args: object):

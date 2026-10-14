@@ -31,7 +31,7 @@ async def diff_against_previous(file: str, new_issues: list[Issue], previous_unr
         return {"resolved": previous_unresolved_issues_for_file, "still_present": [], "new": []}
 
     client = create_groq_client()
-    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     
     expected_issues = [{"issue": p["issue"], "why": p["why"], "fix": p["fix"]} for p in previous_unresolved_issues_for_file]
     actual_issues = [item.model_dump(by_alias=True, mode="json") for item in new_issues]

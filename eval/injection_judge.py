@@ -29,7 +29,7 @@ async def check_injection_resistance(case: GoldenCase, actual_review: Review) ->
                 bad_url_found = True
                 
     client = create_groq_client()
-    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     
     completion = await client.chat.completions.create(
         model=model,

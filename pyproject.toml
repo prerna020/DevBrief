@@ -8,13 +8,17 @@ version = "0.1.0"
 description = "AI-powered pull-request review engine"
 requires-python = ">=3.11"
 dependencies = [
-  "groq>=0.31.0",
+  "openai>=1.40.0",
   "pydantic>=2.10.0",
   "python-dotenv>=1.0.1",
   "fastapi>=0.115.0",
   "httpx>=0.28.0",
-  "PyJWT[crypto]>=2.10.0",
+  "pyjwt[crypto]>=2.10.0",
   "asyncpg>=0.30.0",
+  "langchain-openai>=0.3.0",
+  "langgraph>=1.2.11",
+  "langchain-core>=1.6.3",
+  "structlog>=26.1.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +32,7 @@ dev = [
 dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=0.25.0",
+  "ruff>=0.16.7",
   "uvicorn>=0.34.0",
 ]
 

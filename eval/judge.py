@@ -50,7 +50,7 @@ def _is_retriable(error: Exception) -> bool:
 
 async def judge_review(expected_issues: list[ExpectedIssue], actual_issues: list[Issue]) -> JudgeResult:
     client = create_groq_client()
-    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     last_error: Exception | None = None
     for attempt, delay in enumerate(RETRY_DELAYS_SECONDS, start=1):
         try:

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
-from app.webhook import review_pr
 from app.core.review import ReviewResult, TokenUsage
 from app.core.schema import Issue, Review
-
+from app.webhook import review_pr
 
 FILES = [
     {"filename": "unsafe.py", "patch": "@@ -1,2 +1,3 @@\n context\n+dangerous(user_input)\n clean"},
@@ -31,6 +29,11 @@ class FakeInstallationClient:
             return response(FILES)
         if "/pulls/7" in path:
             return response({"head": {"sha": "head-sha"}})
+        if "/compare/" in path:
+            if "force-push" in path:
+                return httpx.Response(404, request=httpx.Request("GET", "https://api.github.test"))
+            else:
+                return response({"files": [{"filename": "unsafe.py", "patch": "@@ -1,2 +1,3 @@\n context\n+dangerous(user_input)\n clean"}]})
         raise AssertionError(f"Unexpected GET {path}")
 
     async def post(self, path: str, **kwargs: object) -> httpx.Response:
@@ -46,6 +49,8 @@ class FakeRulesConnection:
     async def fetchrow(self, query: str, *_: object):
         if query.startswith("SELECT id, team_id"):
             return {"team_id": 9, "id": 42}
+        if query.startswith("SELECT last_reviewed_sha"):
+            return None
         raise AssertionError(f"Unexpected fetchrow: {query}")
 
     async def fetchval(self, query: str, *args: object):
@@ -55,6 +60,8 @@ class FakeRulesConnection:
         raise AssertionError(f"Unexpected fetchval: {query}")
 
     async def fetch(self, query: str, *_: object):
+        if "SELECT i.id, i.file" in query:
+            return []
         assert "active = true" in query
         return [{"rule_text": "Use parameterized SQL queries"}]
 
@@ -80,7 +87,7 @@ async def test_binary_is_skipped_and_issue_is_mapped_inline(monkeypatch, client:
     monkeypatch.setattr(review_pr, "review_diff", mocked_review)
 
     conn = FakeRulesConnection()
-    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn)
+    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn, "opened")
 
     reviewed_paths = {call.args[1] for call in mocked_review.await_args_list}
     assert reviewed_paths == {"unsafe.py", "clean.py"}  # image.png has no patch and is never reviewed.
@@ -100,7 +107,7 @@ async def test_zero_issues_still_posts_positive_summary(monkeypatch, client: Fak
     monkeypatch.setattr(review_pr, "review_diff", AsyncMock(return_value=review_result()))
 
     conn = FakeRulesConnection()
-    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn)
+    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn, "opened")
 
     payload = client.posts[-1][1]
     assert payload["comments"] == []
@@ -122,7 +129,7 @@ async def test_one_review_failure_does_not_stop_other_files(monkeypatch, client:
     monkeypatch.setattr(review_pr, "review_diff", mocked_review)
 
     conn = FakeRulesConnection()
-    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn)
+    await review_pr.review_pull_request(client, "acme", "demo", 7, "dev123", conn, "opened")
 
     assert {call.args[1] for call in mocked_review.await_args_list} == {"unsafe.py", "clean.py"}
     assert "Failed files: 1" in client.posts[-1][1]["body"]
