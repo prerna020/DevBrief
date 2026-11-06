@@ -1,0 +1,392 @@
+import { Worker, Job } from 'bullmq';
+import dotenv from "dotenv";
+import IORedis from "ioredis";
+import path from "node:path";
+import { readFile } from "node:fs/promises";
+import type { PrReviewJob } from '@devbrief/shared-types';
+import { Octokit } from 'octokit';
+import { createAppAuth } from "@octokit/auth-app";
+import { eq, and } from "drizzle-orm";
+import YAML from 'yaml';
+import { cloneRepo } from './clone';
+
+dotenv.config({ path: path.resolve(__dirname, "../../../.env") }); // root: REDIS_URL
+dotenv.config({ path: path.resolve(__dirname, "../.env") });        // local: APP_ID, PRIVATE_KEY, INTERNAL_SERVICE_TOKEN
+
+if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is not set in the .env file');
+}
+
+// Static ESM imports run before this module body, so @devbrief/db would construct
+// its client with DATABASE_URL unset. Load the environment first, then import
+// the shared database module so it sees DATABASE_URL at creation.
+const { db, repos, reviews, findings, installations, getInstallationOwnerId } = await import("@devbrief/db");
+
+if (!process.env.INTERNAL_SERVICE_TOKEN) {
+    throw new Error(
+        "INTERNAL_SERVICE_TOKEN is not set. This worker authenticates to ai-engine's " +
+        "/v1/review as a trusted internal caller (not a per-user DevBrief API key) — see " +
+        "app.auth.verify_internal_service_token in services/ai-engine."
+    );
+}
+
+const connection = new IORedis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
+
+const auth = createAppAuth({
+    appId: process.env.APP_ID!,
+    privateKey: process.env.PRIVATE_KEY!.replace(/\\n/g, "\n"),
+});
+
+async function fetchDevBriefConfig(
+    octokit: Octokit,
+    owner: string,
+    repoName: string,
+    ref: string
+): Promise<Record<string, unknown> | undefined> {
+    try {
+        const { data } = await octokit.rest.repos.getContent({
+            owner,
+            repo: repoName,
+            path: ".devbrief.yml",
+            ref,
+        })
+        if (!("content" in data)) return undefined;
+
+        const decoded = Buffer.from(data.content, "base64").toString("utf-8");
+        return YAML.parse(decoded);
+    } catch (err) {
+        return undefined;
+    }
+}
+
+/** A known, specific failure (bad model name, revoked provider key, etc.)
+ * where automatically retrying the same job would just fail identically —
+ * distinct from transient errors (network blips, rate limits) where the
+ * generic "will retry automatically" comment is still accurate. */
+class NonRetryableReviewError extends Error { }
+
+async function postFailureComment(
+    octokit: Octokit,
+    owner: string,
+    repoName: string,
+    prNumber: number,
+    reason?: string,
+) {
+    const body = reason
+        ? `⚠️ DevBrief review failed for this commit: ${reason}\n\n<!-- devbrief-failure -->`
+        : "⚠️ DevBrief review failed for this commit — will retry automatically.\n\n<!-- devbrief-failure -->";
+    await octokit.rest.issues.createComment({
+        owner,
+        repo: repoName,
+        issue_number: prNumber,
+        body,
+    });
+}
+
+function getRequireCheck(config: Record<string, unknown> | undefined): boolean {
+    return typeof config?.require_check === "boolean" && config.require_check;
+}
+
+async function getChangedFiles(octokit: Octokit, owner: string, repoName: string, prNumber: number): Promise<string[]> {
+    const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
+        owner,
+        repo: repoName,
+        pull_number: prNumber,
+        per_page: 100,
+    });
+    return files.map((f) => f.filename);
+}
+
+async function readChangedFiles(
+    repoPath: string,
+    changedFiles: string[],
+): Promise<{ path: string; content: string }[]> {
+    const files = await Promise.all(
+        changedFiles.map(async (relPath) => {
+            try {
+                return { path: relPath, content: await readFile(`${repoPath}/${relPath}`, "utf-8") };
+            } catch {
+                return null; // deleted/binary/unreadable — dropped, not fatal
+            }
+        }),
+    );
+    return files.filter((f): f is { path: string; content: string } => f !== null);
+}
+
+async function fetchLintResults(
+    files: { path: string; content: string }[],
+): Promise<unknown[]> {
+    try {
+        // sandbox-runner is a separate container — it can't read repoPath
+        // off this worker's disk, so file contents get shipped instead.
+        // Python-only: JS/TS (eslint) was dropped, see sandbox-runner's
+        // /v1/verify comment for why.
+        const res = await
+            fetch(`${process.env.SANDBOX_RUNNER_URL ??
+                "http://localhost:8001"}/v1/verify`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ files }),
+            });
+        if (!res.ok) return [];
+        const { lint_results } = await res.json() as {
+            lint_results: unknown[]
+        };
+        return lint_results;
+    } catch {
+        return []; // best-effort — sandbox signal is optional, never fails the review
+    }
+}
+
+async function indexPrKnowledge(
+    repoId: string,
+    prNumber: number,
+    title: string,
+    body: string,
+    headSha: string,
+): Promise<void> {
+    try {
+        await fetch(`${process.env.AI_ENGINE_URL ?? "http://localhost:8000"}/v1/index/knowledge`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                repo_id: repoId,
+                documents: [{
+                    kind: "pr",
+                    number: prNumber,
+                    title,
+                    body,
+                    head_sha: headSha,
+                }],
+            }),
+        });
+    } catch {
+        // best-effort — a failed PR index must not fail the review
+    }
+}
+
+function isSandboxEnabled(): boolean {
+    // Preserve the local-development behavior unless deployment configuration
+    // explicitly opts out. The hosted MVP sets this to `false` until the
+    // sandbox has a remote-safe input contract (it cannot receive a local
+    // worker path across services).
+    return process.env.SANDBOX_ENABLED?.toLowerCase() !== "false";
+}
+
+const worker = new Worker<PrReviewJob>("pr-review", async (job: Job<PrReviewJob>) => {
+    const { repo, prNumber, headSha, baseSha, installationId, githubRepoId } = job.data;
+
+    const [existing] = await db.select({ id: reviews.id })
+        .from(reviews)
+        .where(and(
+            eq(reviews.headSha, headSha),
+            eq(reviews.status, 'completed'),
+        ))
+        .limit(1)
+
+    if (existing) return;
+
+    const [owner, repoName] = repo.split("/");
+    if (!owner || !repoName) throw new Error(`Malformed repo full_name : ${repo}`);
+
+    const octokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: {
+            appId: process.env.APP_ID,
+            privateKey: process.env.PRIVATE_KEY!.replace(/\\n/g, "\n"),
+            installationId,
+        },
+    });
+
+    const [existingRepoRow] = await db.select({ id: repos.id })
+        .from(repos)
+        .where(eq(repos.githubRepoId, githubRepoId))
+        .limit(1);
+
+    const [inst] = await db.select({ id: installations.id })
+        .from(installations)
+        .where(eq(installations.githubInstallationId, installationId))
+        .limit(1);
+
+    if (!inst) throw new Error(`Installation ${installationId} not found`);
+
+    // BYOK: resolve which DevBrief user's provider credential powers this review.
+    // See `getInstallationOwnerId` for the "earliest-linked user" tradeoff —
+    // this is a known simplification, not a full multi-user-per-installation
+    // credential model.
+    const onBehalfOfUserId = await getInstallationOwnerId(inst.id);
+
+    try {
+        const { data: diff } = await octokit.rest.pulls.get({
+            owner,
+            repo: repoName,
+            pull_number: prNumber,
+            mediaType: { format: "diff" },
+        });
+
+        const devbriefConfig = await fetchDevBriefConfig(octokit, owner, repoName, headSha);
+
+        let lintResults: unknown[] = [];
+        let fileSnapshots: { path: string; content: string }[] = [];
+        if (isSandboxEnabled()) {
+            const { token } = await auth({ type: "installation", installationId });
+            try {
+                const { path: repoPath, cleanup } = await cloneRepo(owner, repoName, headSha, token);
+                try {
+                    const changedFiles = await getChangedFiles(octokit, owner, repoName, prNumber);
+                    fileSnapshots = await readChangedFiles(repoPath, changedFiles);
+                    lintResults = await fetchLintResults(fileSnapshots);
+                } finally {
+                    await cleanup();
+                }
+            } catch {
+                // clone failed — proceed without sandbox corroboration
+            }
+        }
+
+        if (!onBehalfOfUserId) {
+            throw new Error(
+                `No DevBrief user linked to installation ${installationId} — cannot resolve a BYOK credential.`
+            );
+        }
+
+        const res = await fetch(`${process.env.AI_ENGINE_URL ?? "http://localhost:8000"}/v1/review`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Internal-Service-Token": process.env.INTERNAL_SERVICE_TOKEN!,
+            },
+            body: JSON.stringify({
+                diff: diff as unknown as string,
+                repo_id: existingRepoRow?.id,
+                on_behalf_of_user_id: onBehalfOfUserId,
+                ...(devbriefConfig ? { config: devbriefConfig } : {}),
+                lint_results: lintResults,
+                file_snapshots: fileSnapshots,
+            }),
+        });
+
+        if (res.status === 412 || res.status === 422) {
+            const { detail } = await res.json() as { detail: string };
+            throw new NonRetryableReviewError(detail);
+        }
+        if (!res.ok) {
+            throw new Error(`ai-engine returned ${res.status}`);
+        }
+
+        const { findings: engineFindings } = await res.json() as {
+            findings: { file: string; line: number; severity: string; message: string; rationale: string }[];
+        };
+
+        if (engineFindings.length > 0) {
+
+            await octokit.rest.pulls.createReview({
+                owner,
+                repo: repoName,
+                pull_number: prNumber,
+                commit_id: headSha,
+                event: "COMMENT",
+                comments: engineFindings.map(f => ({
+                    path: f.file,
+                    line: f.line,
+                    body: `**[${f.severity}]** ${f.message}\n\n${f.rationale}`,
+                })),
+            });
+        }
+
+        if (getRequireCheck(devbriefConfig)) {
+            const hasCritical = engineFindings.some(f => f.severity === "critical");
+            await octokit.rest.checks.create({
+                owner,
+                repo: repoName,
+                name: "DevBrief",
+                head_sha: headSha,
+                status: "completed",
+                conclusion: hasCritical ? "failure" : "success",
+                output: {
+                    title: hasCritical
+                        ? "DevBrief found unresolved critical issues"
+                        : "DevBrief review passed",
+                    summary: hasCritical
+                        ? `${engineFindings.filter(f => f.severity === "critical").length} critical finding(s) - see inline comments`
+                        : "No critical findings"
+                }
+            })
+        }
+
+        const [repoRow] = await db.insert(repos)
+            .values({ installationId: inst.id, githubRepoId, fullName: repo })
+            .onConflictDoUpdate({
+                target: repos.githubRepoId,
+                set: { fullName: repo },
+            })
+            .returning({ id: repos.id });
+
+        if (!repoRow) return;
+
+        let title = `${repo}#${prNumber}`;
+        let body = "";
+        try {
+            const { data: pr } = await octokit.rest.pulls.get({
+                owner,
+                repo: repoName,
+                pull_number: prNumber,
+            });
+            if (pr && typeof pr === "object" && "title" in pr && typeof pr.title === "string") {
+                title = pr.title;
+                body = typeof pr.body === "string" ? pr.body : "";
+            }
+        } catch {
+            // title/body stay as fallbacks
+        }
+        await indexPrKnowledge(repoRow.id, prNumber, title, body, headSha);
+
+        await db.transaction(async (tx) => {
+            const [rev] = await tx.insert(reviews)
+                .values({ repoId: repoRow.id, prNumber, headSha, status: 'completed' })
+                .onConflictDoNothing()
+                .returning({ id: reviews.id });
+
+            if (!rev) return;
+
+            if (engineFindings.length > 0) {
+                await tx.insert(findings).values(
+                    engineFindings.map(f => ({
+                        reviewId: rev.id,
+                        file: f.file,
+                        line: f.line,
+                        severity: f.severity as "critical" | "warning" | "info",
+                        message: f.message,
+                        rationale: f.rationale,
+                    }))
+                );
+            }
+        });
+
+
+    } catch (err) {
+        try {
+            const reason = err instanceof NonRetryableReviewError ? err.message : undefined;
+            await postFailureComment(octokit, owner, repoName, prNumber, reason);
+        } catch (commentErr) {
+            console.error("Failed to post failure comment:", commentErr);
+        }
+        throw err;
+    }
+}, { connection });
+
+// One failed review must never take the worker down.
+// - BullMQ emits "error" for connection problems (for example Redis restarting).
+//   With no listener Node treats that as fatal and the whole process exits.
+// - A job that throws is already marked failed by BullMQ; log it so it is visible.
+worker.on("error", (err) => {
+    console.error("pr-review worker error (still running):", err);
+});
+worker.on("failed", (job, err) => {
+    console.error(`pr-review job ${job?.id} failed:`, err.message);
+});
+process.on("unhandledRejection", (reason) => {
+    console.error("unhandled rejection in review worker (still running):", reason);
+});

@@ -1,0 +1,19 @@
+class ProviderCredentialError(RuntimeError):
+    """Raised when the caller's BYOK provider (Gemini/Groq/OpenRouter) rejects the
+    request — bad model name, revoked/invalid key, rate limit, etc. Distinct
+    from a generic crash: `main.py` catches this and returns a clear 4xx
+    instead of an opaque 500, so the CLI and the GitHub App failure comment
+    can both show the user something actionable."""
+
+
+class DiffTooLargeError(RuntimeError):
+    """Raised when the diff exceeds MAX_DIFF_CHARS. `main.py` catches this and
+    returns a 422 so callers get a clear, actionable message instead of a raw
+    500 from an unhandled ValueError."""
+
+
+class InvalidModelOutputError(ProviderCredentialError):
+    """The model kept returning output that is not a valid review (malformed
+    structure, no tool call, empty reply) even after a retry. A subclass of
+    ProviderCredentialError so `main.py` turns it into the same clear 422 as
+    before, which the GitHub App posts as a short failure comment."""

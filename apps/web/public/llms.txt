@@ -1,0 +1,26 @@
+# DevBrief
+
+> DevBrief is an automated code review tool. It reads the diff of a pull request or a local change, inspects it against the repository's configuration, and reports concrete findings — security issues, error-prone patterns, and likely bugs — on the exact lines that cause them. DevBrief has two surfaces: a GitHub App that reviews every pull request automatically (inline comments, a summary, and an optional pass/fail check), and a command-line tool (`devbrief-cli`) for reviewing staged, uncommitted, or committed changes locally with no GitHub connection required.
+
+DevBrief is bring-your-own-key: reviews run on the LLM provider you connect in the dashboard (Gemini, Groq, or OpenRouter), and no code ever leaves through a third-party shared pipeline. It is open architecture — the GitHub App, worker, and AI engine are separate services that communicate over HTTP.
+
+## Key pages
+
+- [Home](http://localhost:3000/): Landing page describing DevBrief's two ways to review — the GitHub App and the CLI.
+- [Get started](http://localhost:3000/install): Choose how to use DevBrief. Install the GitHub App on a repository, or install the CLI with `uv tool install --editable ./apps/cli` (from the repository root).
+- [Docs](http://localhost:3000/docs): Full documentation — installation, GitHub App setup, CLI commands and `devbrief auth`, `.devbrief.yml` configuration, best practices, and troubleshooting.
+- [Sign in](http://localhost:3000/login): Create an account or sign in to generate API keys, connect an LLM provider, and manage your installations.
+
+## Features
+
+- **GitHub App reviews**: automatic inline comments, PR summary, and an optional GitHub Check Run on every pull request.
+- **CLI reviews**: `devbrief review` with `--staged`, `--uncommitted`, `--committed`, `--diff <file>`, and `--include-untracked` scopes.
+- **Bring-your-own-key LLM**: connect a Gemini, Groq, or OpenRouter API key in the dashboard; reviews use that provider.
+- **`.devbrief.yml` configuration**: per-repo tuning with `ignore_paths`, `min_severity`, `max_comments_per_pr`, and `require_check`.
+
+## Install
+
+- pip: `pip install -e ./packages/devbrief-core -e ./apps/cli`
+- uv: `uv tool install --editable ./apps/cli`
+- Authenticate: `devbrief auth` (pastes an API key from the dashboard, validated against DevBrief, stored at `~/.config/devbrief/config.toml`)
+- Review: `devbrief review --staged`

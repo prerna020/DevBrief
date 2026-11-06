@@ -1,0 +1,305 @@
+import { relations } from 'drizzle-orm';
+import { bigint, index, pgTable, text, timestamp, uuid, integer, numeric, primaryKey, boolean, pgEnum, uniqueIndex } from 'drizzle-orm/pg-core';
+import type { AdapterAccountType } from "@auth/core/adapters"
+
+export const findingSeverity = pgEnum('finding_severity', [
+  "critical",
+  "warning",
+  "info",
+]);
+
+export const reviewStatus = pgEnum('review_status', [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+]);
+
+export const modelProvider = pgEnum('model_provider', [
+  'groq',
+  'openrouter',
+  'gemini',
+]);
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email'),
+  name: text('name'),
+  image: text('image'),
+  emailVerified: timestamp('email_verified'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  // BYOK: the user's own Gemini/Groq/OpenRouter key, powering both the GitHub App
+  // review path and the CLI (`devbrief auth` identifies the DevBrief account; the LLM
+  // credential for that account lives here, not in a separate table — this
+  // is a strict 1:1 fact about a user, same pattern as accounts.access_token
+  // living directly on that row).
+  modelProvider: modelProvider('model_provider'),
+  modelName: text('model_name'),
+  modelApiKeyEncrypted: text('model_api_key_encrypted'),
+  // Last 4 chars of the plaintext provider key, for display only (mirrors
+  // apiKeys.lastFour) — can't be recovered from the encrypted column after
+  // the fact, so it's captured separately at write time.
+  modelApiKeyLastFour: text('model_api_key_last_four'),
+});
+
+export const accounts = pgTable(
+  "accounts",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").$type<AdapterAccountType>().notNull(),
+    provider: text("provider").notNull(),
+    providerAccountId: text("provider_account_id").notNull(),
+    refresh_token: text("refresh_token"),
+    access_token: text("access_token"),
+    expires_at: integer("expires_at"),
+    token_type: text("token_type"),
+    scope: text("scope"),
+    id_token: text("id_token"),
+    session_state: text("session_state"),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.provider,
+      table.providerAccountId],
+    }),
+  ]
+)
+
+export const installations = pgTable('installations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  githubInstallationId: bigint('github_installation_id', { mode: 'number' }).notNull().unique(),
+  accountLogin: text('account_login').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  deletedAt: timestamp('deleted_at'),
+});
+
+export const userInstallations = pgTable('user_installations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  installationId: uuid('installation_id').notNull().references(() => installations.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('user_installations_user_installation_unique').on(table.userId, table.installationId),
+  index('user_installations_installation_id_idx').on(table.installationId),
+])
+
+
+export const repos = pgTable('repos', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  installationId: uuid('installation_id').notNull().references(() => installations.id),
+  githubRepoId: bigint('github_repo_id', { mode: 'number' }).notNull().unique(),
+  fullName: text('full_name').notNull(), // "org/repo"
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  deletedAt: timestamp('deleted_at')
+}, (table) => [
+  index('repos_installation_id_idx').on(table.installationId),
+]);
+
+export const apiKeys = pgTable('api_keys', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  name: text('name').notNull().default('Default'),
+  lastFour: text('last_four').notNull(),
+  keyHash: text('key_hash').notNull().unique(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  lastUsedAt: timestamp('last_used_at'),
+  revokedAt: timestamp('revoked_at'),
+}, (table) => [
+  index('api_keys_user_id_idx').on(table.userId),
+]);
+
+export const reviews = pgTable('reviews', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  repoId: uuid('repo_id').notNull().references(() => repos.id),
+  prNumber: bigint('pr_number', { mode: 'number' }).notNull(),
+  headSha: text('head_sha').notNull(),
+  status: reviewStatus('status').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('reviews_repo_id_idx').on(table.repoId),
+  uniqueIndex('reviews_repo_head_unique').on(table.repoId, table.headSha),
+]);
+
+export const findings = pgTable('findings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  reviewId: uuid('review_id').notNull().references(() => reviews.id),
+  file: text('file').notNull(),
+  line: bigint('line', { mode: 'number' }).notNull(),
+  severity: findingSeverity('severity').notNull(),
+  message: text('message').notNull(),
+  rationale: text('rationale').notNull(),
+  resolved: boolean('resolved').default(false).notNull(),
+}, (table) => [
+  index('findings_review_id_idx').on(table.reviewId),
+]);
+
+export const guidelineSource = pgEnum('guideline_source', [
+  'devbrief_yml',
+  'imported',
+]);
+
+export const codingGuidelines = pgTable('coding_guidelines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  repoId: uuid('repo_id').notNull().references(() => repos.id),
+  pathGlob: text('path_glob').notNull(),
+  ruleText: text('rule_text').notNull(),
+  source: guidelineSource('source').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('coding_guidelines_repo_id_idx').on(table.repoId),
+]);
+
+export const learnings = pgTable('learnings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  repoId: uuid('repo_id').notNull().references(() => repos.id),
+  pathGlob: text('path_glob'),
+  pattern: text('pattern'),
+  instruction: text('instruction').notNull(),
+  active: boolean('active').default(true).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('learnings_repo_id_idx').on(table.repoId),
+]);
+
+export const prIndex = pgTable('pr_index', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  repoId: uuid('repo_id').notNull().references(() => repos.id),
+  prNumber: bigint('pr_number', { mode: 'number' }).notNull(),
+  title: text('title').notNull(),
+  body: text('body'),
+  headSha: text('head_sha'),
+  indexedAt: timestamp('indexed_at').defaultNow().notNull(),
+}, (table) => [
+  index('pr_index_repo_id_idx').on(table.repoId),
+  uniqueIndex('pr_index_repo_pr_unique').on(table.repoId, table.prNumber),
+]);
+
+export const issuesIndex = pgTable('issues_index', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  repoId: uuid('repo_id').notNull().references(() => repos.id),
+  issueNumber: bigint('issue_number', { mode: 'number' }).notNull(),
+  title: text('title').notNull(),
+  body: text('body'),
+  state: text('state'),
+  indexedAt: timestamp('indexed_at').defaultNow().notNull(),
+}, (table) => [
+  index('issues_index_repo_id_idx').on(table.repoId),
+  uniqueIndex('issues_index_repo_issue_unique').on(table.repoId, table.issueNumber),
+]);
+
+export const usersRelations = relations(users, ({ many }) => ({
+  apiKeys: many(apiKeys),
+  userInstallations: many(userInstallations),
+  accounts: many(accounts),
+}));
+
+export const installationsRelations = relations(installations, ({ many }) => ({
+  repos: many(repos),
+  userInstallations: many(userInstallations),
+}));
+
+export const reposRelations = relations(repos, ({ one, many }) => ({
+  installation: one(installations, {
+    fields: [repos.installationId],
+    references: [installations.id],
+  }),
+  codingGuidelines: many(codingGuidelines),
+  learnings: many(learnings),
+  prIndex: many(prIndex),
+  issuesIndex: many(issuesIndex),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  user: one(users, {
+    fields: [apiKeys.userId],
+    references: [users.id],
+  }),
+}));
+
+export const reviewsRelations = relations(reviews, ({ one, many }) => ({
+  repo: one(repos, {
+    fields: [reviews.repoId],
+    references: [repos.id],
+  }),
+  findings: many(findings),
+}));
+
+export const findingsRelations = relations(findings, ({ one }) => ({
+  review: one(reviews, {
+    fields: [findings.reviewId],
+    references: [reviews.id],
+  }),
+}));
+
+export const codingGuidelinesRelations = relations(codingGuidelines, ({ one }) => ({
+  repo: one(repos, {
+    fields: [codingGuidelines.repoId],
+    references: [repos.id],
+  }),
+}));
+
+export const learningsRelations = relations(learnings, ({ one }) => ({
+  repo: one(repos, {
+    fields: [learnings.repoId],
+    references: [repos.id],
+  }),
+}));
+
+export const prIndexRelations = relations(prIndex, ({ one }) => ({
+  repo: one(repos, {
+    fields: [prIndex.repoId],
+    references: [repos.id],
+  }),
+}));
+
+export const issuesIndexRelations = relations(issuesIndex, ({ one }) => ({
+  repo: one(repos, {
+    fields: [issuesIndex.repoId],
+    references: [repos.id],
+  }),
+}));
+
+export const userInstallationsRelations =
+  relations(userInstallations, ({ one }) => ({
+    user: one(users, {
+      fields: [userInstallations.userId],
+      references: [users.id],
+    }),
+    installation: one(installations, {
+      fields: [userInstallations.installationId],
+      references: [installations.id],
+    }),
+  }));
+
+export const accountsRelations = relations(accounts,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [accounts.userId],
+      references: [users.id],
+    }),
+  }));
+
+// One row per review's LLM stage, written by services/ai-engine
+// (app/metrics.py). Powers the latency / cost / failure-rate report.
+export const reviewMetrics = pgTable('review_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  // repos.id when the review came from the GitHub App; null for CLI reviews.
+  repoId: uuid('repo_id'),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  latencyMs: integer('latency_ms').notNull(),
+  // Null when the provider did not report token usage.
+  inputTokens: integer('input_tokens'),
+  outputTokens: integer('output_tokens'),
+  // Estimated at list price. Null when tokens or the model's price are unknown.
+  costUsd: numeric('cost_usd', { precision: 12, scale: 6 }),
+  success: boolean('success').notNull(),
+  errorType: text('error_type'),
+  // Model calls made for this review (1 = no retries).
+  attempts: integer('attempts').notNull().default(1),
+}, (table) => [
+  index('review_metrics_created_at_idx').on(table.createdAt),
+]);

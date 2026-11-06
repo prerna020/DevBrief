@@ -1,0 +1,40 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": [".next/**", "!.next/cache/**", "!.next/dev/**"],
+      "env": [
+        "DATABASE_URL",
+        "ENCRYPTION_KEY",
+        "AUTH_GITHUB_ID",
+        "AUTH_GITHUB_SECRET",
+        "AUTH_SECRET",
+        "NEXT_PUBLIC_AI_ENGINE_URL",
+        "NEXT_PUBLIC_SANDBOX_RUNNER_URL"
+      ]
+    },
+    "lint": {
+      "dependsOn": [
+        "^lint"
+      ]
+    },
+    "check-types": {
+      "dependsOn": [
+        "^check-types"
+      ]
+    },
+    "test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

@@ -1,0 +1,32 @@
+# GitHub App manifest. Probot sends this to GitHub when you run
+# scripts\setup-github-app.ps1, so the app is created with the right
+# permissions, events and URLs. Changing this file later does NOT update an
+# app that already exists: edit it at https://github.com/settings/apps instead.
+
+name: DevBrief Reviewer
+description: Automatic AI code review for pull requests.
+url: http://localhost:3000
+
+# Only the account that creates the app can install it.
+public: false
+
+# Events DevBrief reacts to. Installation events are always delivered.
+default_events:
+  - pull_request
+
+default_permissions:
+  # Read the repo (.devbrief.yml and file contents).
+  contents: read
+  metadata: read
+  # Post review comments on pull requests.
+  pull_requests: write
+  # Optional pass/fail check (require_check in .devbrief.yml).
+  checks: write
+
+# The same app also signs users in to the dashboard.
+callback_urls:
+  - http://localhost:3000/api/auth/callback/github
+
+# After installing on GitHub, send the user back to the dashboard.
+setup_url: http://localhost:3000/api/github/install-callback
+setup_on_update: true

@@ -1,0 +1,51 @@
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  js:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: devbrief
+          POSTGRES_PASSWORD: devbrief
+          POSTGRES_DB: devbrief
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devbrief"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check-types
+      - run: bun run lint
+      # @devbrief/db integration tests run against the service container above.
+      - run: bun run test
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - run: uvx ruff check .
+      - name: unit tests (devbrief-core)
+        run: cd packages/devbrief-core && uv run pytest -q
+      - name: unit tests (ai-engine)
+        run: cd services/ai-engine && ../../.venv/bin/python -m pytest tests -q
+      - name: build sandbox image
+        run: docker build -t sandbox-runner:latest -f services/sandbox-runner/Dockerfile .
+      # Smoke test the built image: imports the app (deps present) and confirms
+      # `ruff` — the only runtime linter — is actually on PATH. This is the
+      # minimal stand-in for the old Docker E2E test that exercised the image.
+      - name: smoke test sandbox image
+        run: docker run --rm sandbox-runner:latest python -c "import app.main, shutil; assert shutil.which('ruff'), 'ruff binary missing from image'; print('sandbox image ok')"
+      - name: tests (sandbox-runner)
+        run: cd services/sandbox-runner && ../../.venv/bin/python -m pytest tests -q

@@ -1,0 +1,40 @@
+{
+  "name": "@devbrief/github-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Receives GitHub pull request events for DevBrief and queues reviews.",
+  "keywords": [
+    "probot",
+    "github",
+    "probot-app"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "bunx --bun probot run ./src/index.ts",
+    "test": "vitest run",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@devbrief/db": "workspace:*",
+    "@devbrief/shared-types": "workspace:*",
+    "bullmq": "^6.0.0",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "0.45.2",
+    "ioredis": "^5.10.1",
+    "probot": "^14.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "nock": "^14.0.5",
+    "smee-client": "^5.0.0",
+    "vitest": "^3.2.4",
+    "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "@types/pg": "8.15.1"
+  },
+  "engines": {
+    "node": "^20.18.1 || >= 22"
+  },
+  "type": "module"
+}
